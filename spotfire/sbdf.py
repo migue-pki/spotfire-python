@@ -61,7 +61,7 @@ def import_data(sbdf_file: typing.Union[str, bytes, int]) -> pd.DataFrame:
     """
 
     # Open the SBDF file
-    with open(sbdf_file, "rb") as file:
+    with open(sbdf_file, "rb", buffering=64*1024) as file:
         # Read the file header
         version_major, version_minor = _FileHeader.read(file)
         if version_major != _FileHeader.Major_Version or version_minor != _FileHeader.Minor_Version:
@@ -770,6 +770,7 @@ class _SbdfObject:
     @classmethod
     def _read_n(cls, file: typing.BinaryIO, n: int, valuetype: '_ValueType', packed: bool) -> '_SbdfObject':
         data = []
+        convert_to_python = valuetype.to_python
         if valuetype.is_array():
             # read byte size and ignore it
             if packed:
@@ -782,14 +783,13 @@ class _SbdfObject:
                 if length < 0:
                     raise SBDFError("the number of elements is incorrect")
                 dest = _read_bytes(file, length)
-                data.append(valuetype.to_python(dest))
+                data.append(convert_to_python(dest))
         else:
             size = valuetype.get_packed_size()
             if size is None:
                 raise SBDFError("unknown typeid")
-            for _ in range(n):
-                dest = _read_bytes(file, size)
-                data.append(valuetype.to_python(dest))
+            raw = _read_bytes(file, n * size)
+            data.extend([convert_to_python(raw[i * size: (i + 1) * size]) for i in range(n)])
         return cls(valuetype.type_id, data)
 
     @classmethod
@@ -1088,8 +1088,7 @@ class _ValueTypeId(enum.IntEnum):
 class _ValueType:
     def __init__(self, type_id: int) -> None:
         self.type_id = _ValueTypeId(type_id)
-        _to_python = getattr(self, "_to_python_" + self.type_id.name.lower(), lambda _, x: None)
-        self.to_python = _to_python
+        self.to_python = getattr(self, "_to_python_" + self.type_id.name.lower(), lambda _, x: None)
         self._to_bytes = getattr(self, "_to_bytes_" + self.type_id.name.lower(), lambda _, x: None)
 
     def __repr__(self) -> str:
@@ -1199,11 +1198,6 @@ class _ValueType:
             coefficient //= 10
         # construct the decimal value
         return decimal.Decimal((1 if sign_bit else 0, tuple(digits), exponent))
-
-    def to_python(self, data: bytes) -> typing.Any:
-        """return a Python representation of the raw data"""
-        #return getattr(self, "_to_python_" + self.type_id.name.lower(), lambda x: None)(data)
-        return self._to_python(data)
 
     @staticmethod
     def _to_bytes_bool(obj: bool) -> bytes:
@@ -1378,8 +1372,6 @@ def _section_expect(file: typing.BinaryIO, section_id: _SectionTypeId) -> None:
 # Internals
 
 def _write_bytes(file: typing.BinaryIO, value: bytes) -> int:
-    # if "b" not in file.mode:
-    #     raise SBDFError("file not opened as binary")
     written = file.write(value)
     if written != len(value):
         raise SBDFError("i/o error")
@@ -1387,8 +1379,6 @@ def _write_bytes(file: typing.BinaryIO, value: bytes) -> int:
 
 
 def _read_bytes(file: typing.BinaryIO, n: int) -> bytes:
-    # if "b" not in file.mode:
-    #     raise SBDFError("file not opened as binary")
     bytes_read = file.read(n)
     if len(bytes_read) != n:
         raise SBDFError("i/o error")
