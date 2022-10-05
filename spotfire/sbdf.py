@@ -150,12 +150,13 @@ def _import_table_slices(file: typing.BinaryIO, column_names: typing.List[str],
             cslice = tslice.columns[i]
             cs_values = cslice.values.get_values()
             cs_invalid_prop = cslice.get_property(_ColumnSlice.ValueProperty_IsInvalid)
+            # Optimize the case when there are no invalid values in the slice
             if cs_invalid_prop is None:
-                cs_invalid = [False] * cs_values.get_count()
+                pd_data[column_names[i]] += cs_values.data
             else:
                 cs_invalid = cs_invalid_prop.get_values().data
-            for value, invalid in zip(cs_values.data, cs_invalid):
-                pd_data[column_names[i]].append(None if invalid else value)
+                for value, invalid in zip(cs_values.data, cs_invalid):
+                    pd_data[column_names[i]].append(None if invalid else value)
 
 
 def export_data(obj: typing.Any, sbdf_file: typing.Union[str, bytes, int], default_column_name: str = "x") -> None:
